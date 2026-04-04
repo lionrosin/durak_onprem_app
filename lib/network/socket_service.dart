@@ -2,18 +2,17 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'network_service.dart';
+import 'discovery_service.dart';
 
 /// Socket-based P2P networking for local multiplayer.
-/// Uses TCP for reliable game communication and UDP broadcast for discovery.
-/// Works on simulators, real devices on same WiFi, and cross-platform.
+/// Uses TCP for reliable game communication and mDNS + UDP broadcast for discovery.
+/// Works on real devices on same WiFi, simulators, and cross-platform (Android ↔ iOS).
 class SocketNetworkService implements NetworkService {
-  static const int discoveryPort = 41234;
   static const int defaultGamePort = 41235;
-  static const String discoveryPrefix = 'DURAK_GAME:';
 
   // Discovery
-  RawDatagramSocket? _udpSocket;
-  Timer? _broadcastTimer;
+  final DiscoveryService _discovery = DiscoveryService();
+  StreamSubscription? _discoverySubscription;
 
   // Host mode
   ServerSocket? _serverSocket;
@@ -22,6 +21,20 @@ class SocketNetworkService implements NetworkService {
   // Client mode
   Socket? _hostConnection;
   String? _hostId;
+
+  // Heartbeat
+  Timer? _heartbeatTimer;
+  final Map<String, DateTime> _lastHeartbeat = {};
+  static const Duration _heartbeatInterval = Duration(seconds: 5);
+  static const Duration _heartbeatTimeout = Duration(seconds: 15);
+
+  // Reconnection
+  int _reconnectAttempts = 0;
+  static const int _maxReconnectAttempts = 3;
+  Timer? _reconnectTimer;
+  String? _lastHostId;
+  String? _lastHostAddress;
+  int? _lastHostPort;
 
   // Streams
   final _peerDiscoveredController = StreamController<PeerDevice>.broadcast();
@@ -32,6 +45,9 @@ class SocketNetworkService implements NetworkService {
   String? _localName;
   String? _localId;
   bool _isHost = false;
+
+  @override
+  ConnectionMode get connectionMode => ConnectionMode.wifi;
 
   // ── Host Mode: Advertise & Accept Connections ───────────────────
 
@@ -44,7 +60,7 @@ class SocketNetworkService implements NetworkService {
     _localId = playerName; // Simplified; use UUID in production
     _isHost = true;
 
-    // Start TCP server with dynamic port 0
+    // Start TCP server with dynamic port
     _serverSocket = await ServerSocket.bind(
       InternetAddress.anyIPv4,
       0, // Let OS pick an available port!
@@ -53,37 +69,16 @@ class SocketNetworkService implements NetworkService {
 
     _serverSocket!.listen(_handleClientConnection);
 
-    // Start UDP broadcast for discovery
-    _udpSocket = await RawDatagramSocket.bind(
-      InternetAddress.anyIPv4,
-      discoveryPort,
-      reuseAddress: true,
-      reusePort: true,
+    final gamePort = _serverSocket!.port;
+
+    // Register with mDNS + UDP broadcast via DiscoveryService
+    await _discovery.registerHost(
+      hostName: playerName,
+      port: gamePort,
     );
-    _udpSocket!.broadcastEnabled = true;
 
-    // Broadcast presence periodically
-    _broadcastTimer = Timer.periodic(
-      const Duration(seconds: 2),
-      (_) => _broadcastPresence(),
-    );
-    _broadcastPresence(); // Broadcast immediately
-  }
-
-  void _broadcastPresence() {
-    if (_udpSocket == null || _localName == null) return;
-
-    final message = '$discoveryPrefix$_localName:${_serverSocket?.port ?? defaultGamePort}';
-    final data = utf8.encode(message);
-
-    try {
-      // Broadcast to common subnet addresses
-      _udpSocket!.send(data, InternetAddress('255.255.255.255'), discoveryPort);
-      // Also try localhost for same-machine simulator testing
-      _udpSocket!.send(data, InternetAddress('127.0.0.1'), discoveryPort);
-    } catch (_) {
-      // Ignore broadcast errors
-    }
+    // Start heartbeat timer
+    _startHeartbeat();
   }
 
   void _handleClientConnection(Socket socket) {
@@ -95,12 +90,13 @@ class SocketNetworkService implements NetworkService {
       name: 'Player',
     );
     _clients[peerId] = peer;
+    _lastHeartbeat[peerId] = DateTime.now();
 
     // Set up data listener
     final buffer = StringBuffer();
     socket.listen(
       (data) {
-        buffer.write(utf8.decode(data));
+        buffer.write(utf8.decode(data, allowMalformed: true));
         _processBuffer(buffer, peerId);
       },
       onError: (error) {
@@ -129,16 +125,22 @@ class SocketNetworkService implements NetworkService {
         if (json['type'] == '_handshake') {
           final name = json['name'] as String;
           final id = json['id'] as String;
+          final platform = json['platform'] as String? ?? 'unknown';
 
           if (_clients.containsKey(peerId)) {
             _clients[peerId]!.name = name;
             _clients[peerId]!.id = id;
+            _clients[peerId]!.platform =
+                PeerPlatform.fromString(platform);
           }
+
+          _lastHeartbeat[peerId] = DateTime.now();
 
           _peerConnectedController.add(PeerConnection(
             peerId: id,
             peerName: name,
             isConnected: true,
+            platform: PeerPlatform.fromString(platform),
           ));
 
           // Send handshake response
@@ -146,9 +148,14 @@ class SocketNetworkService implements NetworkService {
             'type': '_handshake_ack',
             'name': _localName,
             'id': _localId,
+            'platform': PeerPlatform.current.name,
           }));
+        } else if (json['type'] == 'heartbeat_ack') {
+          // Update last heartbeat time
+          _lastHeartbeat[peerId] = DateTime.now();
         } else {
-          // Regular message
+          // Regular message — update heartbeat
+          _lastHeartbeat[peerId] = DateTime.now();
           final senderId = _clients[peerId]?.id ?? peerId;
           _messageController.add(PeerMessage(
             senderId: senderId,
@@ -169,6 +176,7 @@ class SocketNetworkService implements NetworkService {
 
   void _removePeer(String peerId) {
     final peer = _clients.remove(peerId);
+    _lastHeartbeat.remove(peerId);
     if (peer != null) {
       peer.socket.destroy();
       _peerDisconnectedController.add(peer.id);
@@ -187,37 +195,17 @@ class SocketNetworkService implements NetworkService {
     _localId = playerId;
     _isHost = false;
 
-    _udpSocket = await RawDatagramSocket.bind(
-      InternetAddress.anyIPv4,
-      discoveryPort,
-      reuseAddress: true,
-      reusePort: true,
-    );
-    _udpSocket!.broadcastEnabled = true;
-
-    _udpSocket!.listen((event) {
-      if (event == RawSocketEvent.read) {
-        final datagram = _udpSocket!.receive();
-        if (datagram == null) return;
-
-        final message = utf8.decode(datagram.data);
-        if (!message.startsWith(discoveryPrefix)) return;
-
-        final parts = message.substring(discoveryPrefix.length).split(':');
-        if (parts.length < 2) return;
-
-        final hostName = parts[0];
-        final port = parts[1];
-        final hostAddress = datagram.address.address;
-        final peerId = '$hostAddress:$port';
-
-        _peerDiscoveredController.add(PeerDevice(
-          id: peerId,
-          name: hostName,
-          isAvailable: true,
-        ));
-      }
+    // Subscribe to discovery service (mDNS + UDP fallback)
+    _discoverySubscription = _discovery.onHostDiscovered.listen((host) {
+      _peerDiscoveredController.add(PeerDevice(
+        id: '${host.host}:${host.port}',
+        name: host.name,
+        isAvailable: true,
+        connectionMode: ConnectionMode.wifi,
+      ));
     });
+
+    await _discovery.startDiscovery();
   }
 
   @override
@@ -227,37 +215,62 @@ class SocketNetworkService implements NetworkService {
       final host = parts[0];
       final port = int.parse(parts[1]);
 
+      _lastHostAddress = host;
+      _lastHostPort = port;
+
       _hostConnection = await Socket.connect(host, port,
           timeout: const Duration(seconds: 5));
       _hostId = peerId;
+      _reconnectAttempts = 0;
 
       // Set up listener
       final buffer = StringBuffer();
       _hostConnection!.listen(
         (data) {
-          buffer.write(utf8.decode(data));
+          buffer.write(utf8.decode(data, allowMalformed: true));
           _processHostBuffer(buffer);
         },
         onError: (error) {
-          _peerDisconnectedController.add(_hostId ?? peerId);
-          _hostConnection = null;
+          _handleHostDisconnect();
         },
         onDone: () {
-          _peerDisconnectedController.add(_hostId ?? peerId);
-          _hostConnection = null;
+          _handleHostDisconnect();
         },
       );
 
-      // Send handshake
+      // Send handshake with platform info
       _sendToHost(jsonEncode({
         'type': '_handshake',
         'name': _localName ?? 'Player',
         'id': _localId ?? 'unknown',
+        'platform': PeerPlatform.current.name,
       }));
 
       return true;
     } catch (e) {
       return false;
+    }
+  }
+
+  void _handleHostDisconnect() {
+    _hostConnection?.destroy();
+    _hostConnection = null;
+
+    // Attempt reconnection
+    if (_reconnectAttempts < _maxReconnectAttempts &&
+        _lastHostAddress != null &&
+        _lastHostPort != null) {
+      _reconnectAttempts++;
+      final delay = Duration(seconds: _reconnectAttempts * 2);
+      _reconnectTimer = Timer(delay, () async {
+        final success = await connectToPeer(
+            '$_lastHostAddress:$_lastHostPort');
+        if (!success && _reconnectAttempts >= _maxReconnectAttempts) {
+          _peerDisconnectedController.add(_hostId ?? _lastHostId ?? '');
+        }
+      });
+    } else {
+      _peerDisconnectedController.add(_hostId ?? _lastHostId ?? '');
     }
   }
 
@@ -275,12 +288,18 @@ class SocketNetworkService implements NetworkService {
         if (json['type'] == '_handshake_ack') {
           final name = json['name'] as String;
           final id = json['id'] as String;
+          final platform = json['platform'] as String? ?? 'unknown';
           _hostId = id;
+          _lastHostId = id;
           _peerConnectedController.add(PeerConnection(
             peerId: id,
             peerName: name,
             isConnected: true,
+            platform: PeerPlatform.fromString(platform),
           ));
+        } else if (json['type'] == 'heartbeat') {
+          // Reply with heartbeat ack
+          _sendToHost(jsonEncode({'type': 'heartbeat_ack'}));
         } else {
           _messageController.add(PeerMessage(
             senderId: _hostId ?? 'host',
@@ -294,6 +313,32 @@ class SocketNetworkService implements NetworkService {
     if (lines.last.isNotEmpty) {
       buffer.write(lines.last);
     }
+  }
+
+  // ── Heartbeat ──────────────────────────────────────────────────
+
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) {
+      if (_isHost) {
+        // Send heartbeat to all clients + check for stale
+        final now = DateTime.now();
+        for (final entry in _clients.entries.toList()) {
+          final last = _lastHeartbeat[entry.key];
+          if (last != null && now.difference(last) > _heartbeatTimeout) {
+            // Client timed out
+            _removePeer(entry.key);
+          } else {
+            try {
+              entry.value.socket.write(
+                  '${jsonEncode({"type": "heartbeat"})}\n');
+            } catch (_) {
+              _removePeer(entry.key);
+            }
+          }
+        }
+      }
+    });
   }
 
   void _sendToHost(String data) {
@@ -321,16 +366,18 @@ class SocketNetworkService implements NetworkService {
 
   @override
   Future<void> stopAdvertising() async {
-    _broadcastTimer?.cancel();
-    _broadcastTimer = null;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    await _discovery.stopAll();
     await _serverSocket?.close();
     _serverSocket = null;
   }
 
   @override
   Future<void> stopBrowsing() async {
-    _udpSocket?.close();
-    _udpSocket = null;
+    _discoverySubscription?.cancel();
+    _discoverySubscription = null;
+    await _discovery.stopAll();
   }
 
   @override
@@ -345,10 +392,13 @@ class SocketNetworkService implements NetworkService {
 
   @override
   Future<void> disconnectAll() async {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     for (final peer in _clients.values.toList()) {
       peer.socket.destroy();
     }
     _clients.clear();
+    _lastHeartbeat.clear();
     _hostConnection?.destroy();
     _hostConnection = null;
   }
@@ -393,10 +443,11 @@ class SocketNetworkService implements NetworkService {
 
   @override
   Future<void> dispose() async {
-    _broadcastTimer?.cancel();
+    _heartbeatTimer?.cancel();
+    _reconnectTimer?.cancel();
     await disconnectAll();
     await _serverSocket?.close();
-    _udpSocket?.close();
+    await _discovery.dispose();
     await _peerDiscoveredController.close();
     await _peerConnectedController.close();
     await _peerDisconnectedController.close();
@@ -408,10 +459,12 @@ class _PeerSocket {
   String id;
   final Socket socket;
   String name;
+  PeerPlatform platform;
 
   _PeerSocket({
     required this.id,
     required this.socket,
     required this.name,
+    this.platform = PeerPlatform.unknown, // ignore: unused_element_parameter
   });
 }

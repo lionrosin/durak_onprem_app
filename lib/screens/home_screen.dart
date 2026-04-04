@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
+import '../network/network_service.dart';
 import '../theme/app_theme.dart';
 
 /// Stunning title screen with animated cards and game mode selection.
+/// Now includes connection mode picker (WiFi / Bluetooth) for multiplayer.
 class HomeScreen extends StatefulWidget {
   final String playerName;
-  final Function(String name) onCreateGame;
-  final Function(String name) onJoinGame;
+  final Function(String name, ConnectionMode mode) onCreateGame;
+  final Function(String name, ConnectionMode mode) onJoinGame;
   final Function(String name) onSinglePlayer;
   final VoidCallback? onSettings;
 
@@ -44,7 +46,7 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void didUpdateWidget(HomeScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.playerName != oldWidget.playerName && 
+    if (widget.playerName != oldWidget.playerName &&
         _nameController.text != widget.playerName) {
       _nameController.text = widget.playerName;
     }
@@ -190,29 +192,239 @@ class _HomeScreenState extends State<HomeScreen>
           ),
           const SizedBox(height: 12),
 
-          // Create Game (Host)
+          // Create Game (Host) — opens connection mode picker
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: () =>
-                  widget.onCreateGame(name.isEmpty ? 'Player' : name),
+              onPressed: () => _showConnectionModePicker(
+                isHost: true,
+                name: name.isEmpty ? 'Player' : name,
+              ),
               icon: const Icon(Icons.wifi_tethering),
               label: const Text('Create Game'),
             ),
           ),
           const SizedBox(height: 12),
 
-          // Join Game
+          // Join Game — opens connection mode picker
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
-              onPressed: () =>
-                  widget.onJoinGame(name.isEmpty ? 'Player' : name),
+              onPressed: () => _showConnectionModePicker(
+                isHost: false,
+                name: name.isEmpty ? 'Player' : name,
+              ),
               icon: const Icon(Icons.search),
               label: const Text('Join Game'),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Shows a bottom sheet to pick WiFi or Bluetooth connection mode.
+  void _showConnectionModePicker({
+    required bool isHost,
+    required String name,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppTheme.surfaceDialog,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Handle bar
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withAlpha(30),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Title
+              Text(
+                isHost ? 'How to Host?' : 'How to Connect?',
+                style: const TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                isHost
+                    ? 'Choose how players will connect to your game'
+                    : 'Choose how to find nearby games',
+                style: TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // WiFi option
+              _ConnectionModeCard(
+                icon: Icons.wifi,
+                iconColor: const Color(0xFF4FC3F7),
+                title: 'WiFi',
+                subtitle: 'Play over local network',
+                description: 'All players must be on the same WiFi',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  if (isHost) {
+                    widget.onCreateGame(name, ConnectionMode.wifi);
+                  } else {
+                    widget.onJoinGame(name, ConnectionMode.wifi);
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
+
+              // Bluetooth option
+              _ConnectionModeCard(
+                icon: Icons.bluetooth,
+                iconColor: const Color(0xFF42A5F5),
+                title: 'Bluetooth',
+                subtitle: 'Play nearby without WiFi',
+                description: 'Uses Bluetooth Low Energy for close range play',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  if (isHost) {
+                    widget.onCreateGame(name, ConnectionMode.bluetooth);
+                  } else {
+                    widget.onJoinGame(name, ConnectionMode.bluetooth);
+                  }
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// A tappable card for connection mode selection.
+class _ConnectionModeCard extends StatefulWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String subtitle;
+  final String description;
+  final VoidCallback onTap;
+
+  const _ConnectionModeCard({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.subtitle,
+    required this.description,
+    required this.onTap,
+  });
+
+  @override
+  State<_ConnectionModeCard> createState() => _ConnectionModeCardState();
+}
+
+class _ConnectionModeCardState extends State<_ConnectionModeCard> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) {
+        setState(() => _pressed = false);
+        widget.onTap();
+      },
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedScale(
+        scale: _pressed ? 0.97 : 1.0,
+        duration: const Duration(milliseconds: 100),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                widget.iconColor.withAlpha(15),
+                widget.iconColor.withAlpha(5),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: widget.iconColor.withAlpha(40),
+              width: 1.5,
+            ),
+          ),
+          child: Row(
+            children: [
+              // Icon
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: widget.iconColor.withAlpha(20),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(widget.icon, color: widget.iconColor, size: 26),
+              ),
+              const SizedBox(width: 16),
+              // Text
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          widget.title,
+                          style: TextStyle(
+                            color: widget.iconColor,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          widget.subtitle,
+                          style: TextStyle(
+                            color: AppTheme.textSecondary,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      widget.description,
+                      style: TextStyle(
+                        color: AppTheme.textSecondary.withAlpha(140),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right,
+                  color: widget.iconColor.withAlpha(100), size: 22),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -1,4 +1,5 @@
 import 'card.dart';
+import '../network/network_service.dart' show PeerPlatform;
 
 enum ConnectionStatus {
   connected,
@@ -12,6 +13,7 @@ class Player {
   final List<PlayingCard> hand;
   final bool isHost;
   ConnectionStatus connectionStatus;
+  final PeerPlatform platform;
 
   Player({
     required this.id,
@@ -19,6 +21,7 @@ class Player {
     List<PlayingCard>? hand,
     this.isHost = false,
     this.connectionStatus = ConnectionStatus.connected,
+    this.platform = PeerPlatform.unknown,
   }) : hand = hand ?? [];
 
   /// Number of cards in hand.
@@ -59,6 +62,7 @@ class Player {
     List<PlayingCard>? hand,
     bool? isHost,
     ConnectionStatus? connectionStatus,
+    PeerPlatform? platform,
   }) {
     return Player(
       id: id ?? this.id,
@@ -66,6 +70,7 @@ class Player {
       hand: hand ?? List.from(this.hand),
       isHost: isHost ?? this.isHost,
       connectionStatus: connectionStatus ?? this.connectionStatus,
+      platform: platform ?? this.platform,
     );
   }
 
@@ -75,6 +80,7 @@ class Player {
         'hand': hand.map((c) => c.toJson()).toList(),
         'isHost': isHost,
         'connectionStatus': connectionStatus.name,
+        'platform': platform.name,
       };
 
   /// Serialize for network but hide hand contents (for opponents).
@@ -84,6 +90,7 @@ class Player {
         'cardCount': cardCount,
         'isHost': isHost,
         'connectionStatus': connectionStatus.name,
+        'platform': platform.name,
       };
 
   factory Player.fromJson(Map<String, dynamic> json) => Player(
@@ -97,6 +104,9 @@ class Player {
         connectionStatus: ConnectionStatus.values.firstWhere(
           (s) => s.name == (json['connectionStatus'] as String?),
           orElse: () => ConnectionStatus.connected,
+        ),
+        platform: PeerPlatform.fromString(
+          json['platform'] as String? ?? 'unknown',
         ),
       );
 

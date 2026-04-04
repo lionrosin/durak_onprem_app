@@ -47,6 +47,18 @@ dependencies:
   # Settings persistence
   shared_preferences: ^2.3.0
 
+  # mDNS/DNS-SD discovery for cross-platform WiFi multiplayer
+  nsd: ^5.0.1
+
+  # BLE - Central role (client scanning & connecting)
+  flutter_blue_plus: ^1.0.0
+
+  # BLE - Peripheral role (host advertising)
+  flutter_ble_peripheral: ^2.1.0
+
+  # Runtime permission handling (Bluetooth on Android)
+  permission_handler: ^11.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

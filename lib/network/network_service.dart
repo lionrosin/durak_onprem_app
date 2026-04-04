@@ -1,6 +1,17 @@
+import 'dart:io' show Platform;
+
+/// Connection mode for multiplayer.
+enum ConnectionMode {
+  wifi,
+  bluetooth,
+}
+
 /// Abstract interface for P2P connectivity.
-/// Implementations handle platform-specific details.
+/// Implementations handle platform-specific details (WiFi sockets, BLE, etc).
 abstract class NetworkService {
+  /// The connection mode this service uses.
+  ConnectionMode get connectionMode;
+
   /// Start advertising this device as a game host.
   Future<void> startAdvertising({
     required String playerName,
@@ -51,16 +62,42 @@ abstract class NetworkService {
   Future<void> dispose();
 }
 
+/// The platform the peer is running on.
+enum PeerPlatform {
+  android,
+  ios,
+  unknown;
+
+  static PeerPlatform get current {
+    try {
+      if (Platform.isAndroid) return PeerPlatform.android;
+      if (Platform.isIOS) return PeerPlatform.ios;
+    } catch (_) {}
+    return PeerPlatform.unknown;
+  }
+
+  static PeerPlatform fromString(String value) {
+    return PeerPlatform.values.firstWhere(
+      (p) => p.name == value,
+      orElse: () => PeerPlatform.unknown,
+    );
+  }
+}
+
 /// Represents a discovered nearby device.
 class PeerDevice {
   final String id;
   final String name;
   final bool isAvailable;
+  final PeerPlatform platform;
+  final ConnectionMode connectionMode;
 
   PeerDevice({
     required this.id,
     required this.name,
     this.isAvailable = true,
+    this.platform = PeerPlatform.unknown,
+    this.connectionMode = ConnectionMode.wifi,
   });
 }
 
@@ -69,11 +106,13 @@ class PeerConnection {
   final String peerId;
   final String peerName;
   final bool isConnected;
+  final PeerPlatform platform;
 
   PeerConnection({
     required this.peerId,
     required this.peerName,
     required this.isConnected,
+    this.platform = PeerPlatform.unknown,
   });
 }
 

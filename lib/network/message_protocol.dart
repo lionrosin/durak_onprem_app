@@ -22,6 +22,13 @@ enum MessageType {
 
   /// Player left notification
   playerLeft,
+
+  /// Heartbeat (connection health check)
+  heartbeat,
+  heartbeatAck,
+
+  /// Reconnection request (client → host)
+  reconnect,
 }
 
 /// A network message with type, payload, and sequence number.
@@ -122,6 +129,42 @@ class NetworkMessage {
     return NetworkMessage(
       type: MessageType.pong,
       payload: {'timestamp': DateTime.now().millisecondsSinceEpoch},
+      sequenceNumber: 0,
+      senderId: senderId,
+    );
+  }
+
+  /// Heartbeat for connection health monitoring.
+  factory NetworkMessage.heartbeat({required String senderId}) {
+    return NetworkMessage(
+      type: MessageType.heartbeat,
+      payload: {'timestamp': DateTime.now().millisecondsSinceEpoch},
+      sequenceNumber: 0,
+      senderId: senderId,
+    );
+  }
+
+  factory NetworkMessage.heartbeatAck({required String senderId}) {
+    return NetworkMessage(
+      type: MessageType.heartbeatAck,
+      payload: {'timestamp': DateTime.now().millisecondsSinceEpoch},
+      sequenceNumber: 0,
+      senderId: senderId,
+    );
+  }
+
+  /// Reconnection request from a client that was previously connected.
+  factory NetworkMessage.reconnect({
+    required String senderId,
+    required String gameId,
+    required String platform,
+  }) {
+    return NetworkMessage(
+      type: MessageType.reconnect,
+      payload: {
+        'gameId': gameId,
+        'platform': platform,
+      },
       sequenceNumber: 0,
       senderId: senderId,
     );

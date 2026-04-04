@@ -1,5 +1,9 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 
@@ -7,6 +11,7 @@ import 'engine/ai_player.dart';
 import 'engine/game_manager.dart';
 import 'models/game_state.dart';
 import 'models/player.dart';
+import 'network/ble_network_service.dart';
 import 'network/message_protocol.dart';
 import 'network/network_service.dart';
 import 'network/socket_service.dart';
@@ -62,7 +67,8 @@ class _AppShellState extends State<AppShell> {
   Timer? _aiTimer;
 
   // Multiplayer state
-  SocketNetworkService? _networkService;
+  NetworkService? _networkService;
+  ConnectionMode _connectionMode = ConnectionMode.wifi;
   bool _isHost = false;
   String _localPlayerId = '';
   final List<Player> _lobbyPlayers = [];
@@ -84,6 +90,39 @@ class _AppShellState extends State<AppShell> {
     _networkSubs.clear();
     _networkService?.dispose();
     _networkService = null;
+  }
+
+  /// Create the appropriate NetworkService for the selected connection mode.
+  NetworkService _createNetworkService(ConnectionMode mode) {
+    switch (mode) {
+      case ConnectionMode.wifi:
+        return SocketNetworkService();
+      case ConnectionMode.bluetooth:
+        return BleNetworkService();
+    }
+  }
+
+  /// Request Bluetooth permissions (Android 12+).
+  Future<bool> _requestBluetoothPermissions() async {
+    if (kIsWeb) return false;
+    if (!Platform.isAndroid && !Platform.isIOS) return false;
+
+    if (Platform.isAndroid) {
+      final statuses = await [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.bluetoothAdvertise,
+      ].request();
+
+      final allGranted = statuses.values.every(
+        (s) => s.isGranted || s.isLimited,
+      );
+      return allGranted;
+    }
+
+    // iOS handles Bluetooth permissions via Info.plist usage descriptions
+    // and prompts automatically on first use.
+    return true;
   }
 
   @override
@@ -127,6 +166,7 @@ class _AppShellState extends State<AppShell> {
           onStartGame: _onStartMultiplayerGame,
           onCancel: _backToHome,
           hostName: _isHost ? null : _lobbyPlayers.firstOrNull?.name,
+          connectionMode: _connectionMode,
         );
       case AppScreen.game:
         return GameScreen(
@@ -170,7 +210,12 @@ class _AppShellState extends State<AppShell> {
     final aiId = _uuid.v4();
 
     final players = [
-      Player(id: _localPlayerId, name: name, isHost: true),
+      Player(
+        id: _localPlayerId,
+        name: name,
+        isHost: true,
+        platform: PeerPlatform.current,
+      ),
       Player(id: aiId, name: 'AI Bot'),
     ];
 
@@ -209,21 +254,34 @@ class _AppShellState extends State<AppShell> {
 
   // ── Multiplayer: Create Game (Host) ────────────────────────────
 
-  Future<void> _onCreateGame(String name) async {
+  Future<void> _onCreateGame(String name, ConnectionMode mode) async {
     _playerName = name;
     _isHost = true;
+    _connectionMode = mode;
     _localPlayerId = _uuid.v4();
     _lobbyVariant = _defaultVariant;
 
+    // Request BLE permissions if needed
+    if (mode == ConnectionMode.bluetooth) {
+      final granted = await _requestBluetoothPermissions();
+      if (!granted) {
+        if (mounted) {
+          _showSnack('Bluetooth permissions are required for Bluetooth mode');
+        }
+        return;
+      }
+    }
+
     // Set up network
     _cleanupNetwork();
-    _networkService = SocketNetworkService();
+    _networkService = _createNetworkService(mode);
 
     _lobbyPlayers.clear();
     _lobbyPlayers.add(Player(
       id: _localPlayerId,
       name: name,
       isHost: true,
+      platform: PeerPlatform.current,
     ));
 
     // Listen for connections
@@ -234,6 +292,7 @@ class _AppShellState extends State<AppShell> {
             _lobbyPlayers.add(Player(
               id: conn.peerId,
               name: conn.peerName,
+              platform: conn.platform,
             ));
           }
         });
@@ -280,17 +339,29 @@ class _AppShellState extends State<AppShell> {
 
   // ── Multiplayer: Join Game (Client) ────────────────────────────
 
-  Future<void> _onJoinGame(String name) async {
+  Future<void> _onJoinGame(String name, ConnectionMode mode) async {
     _playerName = name;
     _isHost = false;
+    _connectionMode = mode;
     _localPlayerId = _uuid.v4();
 
+    // Request BLE permissions if needed
+    if (mode == ConnectionMode.bluetooth) {
+      final granted = await _requestBluetoothPermissions();
+      if (!granted) {
+        if (mounted) {
+          _showSnack('Bluetooth permissions are required for Bluetooth mode');
+        }
+        return;
+      }
+    }
+
     _cleanupNetwork();
-    _networkService = SocketNetworkService();
+    _networkService = _createNetworkService(mode);
     _discoveredPeers.clear();
 
     final gm = context.read<GameManager>();
-    
+
     // Wire network callback for sending actions to host
     gm.onActionToSend = (action) {
       if (_networkService != null) {
@@ -323,10 +394,12 @@ class _AppShellState extends State<AppShell> {
           id: conn.peerId,
           name: conn.peerName,
           isHost: true,
+          platform: conn.platform,
         ));
         _lobbyPlayers.add(Player(
           id: _localPlayerId,
           name: name,
+          platform: PeerPlatform.current,
         ));
         setState(() => _currentScreen = AppScreen.lobby);
       }),
@@ -356,7 +429,10 @@ class _AppShellState extends State<AppShell> {
     );
 
     if (mounted) {
-      _showSnack('Searching for games on local network...');
+      final modeLabel = mode == ConnectionMode.wifi
+          ? 'local network'
+          : 'Bluetooth';
+      _showSnack('Searching for games via $modeLabel...');
     }
   }
 
@@ -457,6 +533,9 @@ class _AppShellState extends State<AppShell> {
                   id: pj['id'] as String,
                   name: pj['name'] as String,
                   isHost: pj['isHost'] as bool? ?? false,
+                  platform: PeerPlatform.fromString(
+                    pj['platform'] as String? ?? 'unknown',
+                  ),
                 ));
               }
             });
@@ -470,8 +549,18 @@ class _AppShellState extends State<AppShell> {
           );
           break;
 
+        case MessageType.heartbeat:
+          _networkService?.sendMessage(
+            peerMessage.senderId,
+            NetworkMessage.heartbeatAck(senderId: _localPlayerId).serialize(),
+          );
+          break;
+
         case MessageType.pong:
         case MessageType.playerLeft:
+        case MessageType.heartbeatAck:
+        case MessageType.reconnect:
+          // Handled at transport level or not yet implemented
           break;
       }
     } catch (e) {

@@ -87,6 +87,19 @@ class GameSync {
         case MessageType.playerLeft:
           // Handle player disconnection
           break;
+
+        case MessageType.heartbeat:
+          // Reply with heartbeat ack
+          _network.sendMessage(
+            peerMessage.senderId,
+            NetworkMessage.heartbeatAck(senderId: localPlayerId).serialize(),
+          );
+          break;
+
+        case MessageType.heartbeatAck:
+        case MessageType.reconnect:
+          // Handled at transport level
+          break;
       }
     } catch (e) {
       // Malformed message — ignore

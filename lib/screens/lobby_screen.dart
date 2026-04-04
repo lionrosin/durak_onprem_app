@@ -1,15 +1,18 @@
 import 'package:flutter/material.dart';
 import '../models/player.dart';
 import '../models/game_state.dart';
+import '../network/network_service.dart';
 import '../theme/app_theme.dart';
 
 /// Game lobby — host configures settings, clients wait.
+/// Shows connection mode indicator and platform badges.
 class LobbyScreen extends StatefulWidget {
   final bool isHost;
   final List<Player> connectedPlayers;
   final Function(GameVariant variant)? onStartGame;
   final VoidCallback? onCancel;
   final String? hostName;
+  final ConnectionMode connectionMode;
 
   const LobbyScreen({
     super.key,
@@ -18,6 +21,7 @@ class LobbyScreen extends StatefulWidget {
     this.onStartGame,
     this.onCancel,
     this.hostName,
+    this.connectionMode = ConnectionMode.wifi,
   });
 
   @override
@@ -76,7 +80,11 @@ class _LobbyScreenState extends State<LobbyScreen>
                     const SizedBox(width: 48), // balance
                   ],
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
+
+                // Connection mode badge
+                _buildConnectionModeBadge(),
+                const SizedBox(height: 16),
 
                 // Connection status
                 _buildConnectionStatus(),
@@ -116,6 +124,38 @@ class _LobbyScreenState extends State<LobbyScreen>
     );
   }
 
+  Widget _buildConnectionModeBadge() {
+    final isWifi = widget.connectionMode == ConnectionMode.wifi;
+    final icon = isWifi ? Icons.wifi : Icons.bluetooth;
+    final label = isWifi ? 'WiFi' : 'Bluetooth';
+    final color = isWifi ? const Color(0xFF4FC3F7) : const Color(0xFF42A5F5);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withAlpha(15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withAlpha(50)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildConnectionStatus() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -137,13 +177,15 @@ class _LobbyScreenState extends State<LobbyScreen>
             ),
           ),
           const SizedBox(width: 12),
-          Text(
-            widget.isHost
-                ? 'Hosting — waiting for players to join'
-                : 'Connected to ${widget.hostName ?? "host"}',
-            style: const TextStyle(
-              color: AppTheme.textPrimary,
-              fontSize: 14,
+          Expanded(
+            child: Text(
+              widget.isHost
+                  ? 'Hosting — waiting for players to join'
+                  : 'Connected to ${widget.hostName ?? "host"}',
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 14,
+              ),
             ),
           ),
         ],
@@ -170,7 +212,7 @@ class _LobbyScreenState extends State<LobbyScreen>
           Expanded(
             child: ListView.separated(
               itemCount: maxPlayers,
-              separatorBuilder: (_, _) => const Divider(
+              separatorBuilder: (_, _a) => const Divider(
                 color: AppTheme.textSecondary,
                 height: 1,
                 indent: 48,
@@ -201,12 +243,24 @@ class _LobbyScreenState extends State<LobbyScreen>
           ),
         ),
       ),
-      title: Text(
-        player.name,
-        style: const TextStyle(
-          color: AppTheme.textPrimary,
-          fontWeight: FontWeight.w500,
-        ),
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              player.name,
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontWeight: FontWeight.w500,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 6),
+          // Platform badge
+          _PlatformBadge(
+            platform: player.platform,
+          ),
+        ],
       ),
       subtitle: Text(
         player.isHost ? 'Host' : 'Player ${index + 1}',
@@ -292,6 +346,57 @@ class _LobbyScreenState extends State<LobbyScreen>
           ),
         );
       },
+    );
+  }
+}
+
+/// Shows a small platform icon badge (Android/iOS).
+class _PlatformBadge extends StatelessWidget {
+  final PeerPlatform platform;
+
+  const _PlatformBadge({required this.platform});
+
+  @override
+  Widget build(BuildContext context) {
+    if (platform == PeerPlatform.unknown) return const SizedBox.shrink();
+
+    final isAndroid = platform == PeerPlatform.android;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: (isAndroid ? const Color(0xFF66BB6A) : const Color(0xFF90CAF9))
+            .withAlpha(20),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: (isAndroid
+                  ? const Color(0xFF66BB6A)
+                  : const Color(0xFF90CAF9))
+              .withAlpha(60),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isAndroid ? Icons.android : Icons.phone_iphone,
+            size: 12,
+            color: isAndroid
+                ? const Color(0xFF66BB6A)
+                : const Color(0xFF90CAF9),
+          ),
+          const SizedBox(width: 3),
+          Text(
+            isAndroid ? 'Android' : 'iOS',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: isAndroid
+                  ? const Color(0xFF66BB6A)
+                  : const Color(0xFF90CAF9),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

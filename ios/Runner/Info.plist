@@ -70,11 +70,13 @@
 	<string>Durak uses local network to find and play with nearby players</string>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_durak-game._tcp</string>
+		<string>_durak._tcp</string>
 	</array>
 	<key>UIRequiresPersistentWiFi</key>
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Bluetooth is used to find and connect with nearby players</string>
+	<string>Durak uses Bluetooth to discover and play with nearby players when WiFi is unavailable</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Durak uses Bluetooth to host games for nearby players</string>
 </dict>
 </plist>
