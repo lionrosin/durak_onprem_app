@@ -316,26 +316,26 @@ class GameEngine {
           state, 'Transfer card must match the rank of attack cards');
     }
 
-    // The next player must have enough cards to defend
+    // Determine the next defender after transfer
     final nextDefender =
         _nextActivePlayerIndex(state, state.defenderIndex);
-    if (nextDefender == state.attackerIndex) {
-      // Can't transfer back to the original attacker if they'd be
-      // the only option (wrap-around in 2-player).
-      // Actually in 2-player Perevodnoy, some rules allow it.
-      // We'll allow if there are >2 active players OR if it wraps.
-      if (state.activePlayers <= 2) {
-        return ActionResult.failure(
-            state, 'Cannot transfer in a 2-player game');
-      }
+
+    // Validate the next defender has enough cards for all the attacks
+    final nextDefenderCards = state.players[nextDefender].cardCount;
+    final totalAttacks = state.tablePairs.length + 1; // +1 for the transfer card
+    if (nextDefenderCards < totalAttacks) {
+      return ActionResult.failure(
+          state, 'Next player doesn\'t have enough cards to defend');
     }
 
     final newState = state.copyWith();
     newState.players[playerIndex].removeCard(action.card);
     newState.tablePairs.add(TablePair(attackCard: action.card));
 
-    // The current defender becomes an attacker,
-    // the next player becomes the new defender
+    // Current defender becomes the "attacker" (they transferred),
+    // the next player becomes the new defender.
+    // In 2-player: the original attacker becomes the new defender.
+    newState.attackerIndex = state.defenderIndex;
     newState.defenderIndex = nextDefender;
     newState.phase = GamePhase.defending;
     newState.passedPlayers.clear();
@@ -528,7 +528,21 @@ class GameEngine {
     if (state.variant != GameVariant.transfer) return false;
     if (state.phase != GamePhase.defending) return false;
     if (state.tablePairs.any((p) => p.isDefended)) return false;
-    if (state.activePlayers <= 2) return false;
+
+    // Check that defender has a card matching an attack rank
+    final defender = state.players[state.defenderIndex];
+    final attackRanks =
+        state.tablePairs.map((p) => p.attackCard.rank).toSet();
+    final hasTransferCard =
+        defender.hand.any((c) => attackRanks.contains(c.rank));
+    if (!hasTransferCard) return false;
+
+    // Check next defender has enough cards
+    final nextDefender =
+        _nextActivePlayerIndex(state, state.defenderIndex);
+    final totalAttacks = state.tablePairs.length + 1;
+    if (state.players[nextDefender].cardCount < totalAttacks) return false;
+
     return true;
   }
 }

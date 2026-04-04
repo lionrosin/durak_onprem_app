@@ -142,6 +142,7 @@ class _AppShellState extends State<AppShell> {
           localPlayerId: gm.localPlayerId!,
           onPlayAgain: _onPlayAgain,
           onBackToMenu: _backToHome,
+          isMultiplayer: _aiPlayer == null && _networkService != null,
         );
       case AppScreen.settings:
         return SettingsScreen(
