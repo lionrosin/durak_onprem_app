@@ -94,19 +94,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     // Default Game Mode
                     _buildSection(
                       'Default Game Mode',
-                      Column(
-                        children: [
-                          _buildRadioTile(
-                            'Classic Durak',
-                            'Standard rules — defend or pick up',
-                            GameVariant.classic,
-                          ),
-                          _buildRadioTile(
-                            'Transfer Durak (Perevodnoy)',
-                            'Pass attacks to the next player',
-                            GameVariant.transfer,
-                          ),
-                        ],
+                      RadioGroup<GameVariant>(
+                        groupValue: _variant,
+                        onChanged: (v) => setState(() { if (v != null) _variant = v; }),
+                        child: Column(
+                          children: [
+                            _buildRadioTile(
+                              'Classic Durak',
+                              'Standard rules — defend or pick up',
+                              GameVariant.classic,
+                            ),
+                            _buildRadioTile(
+                              'Transfer Durak (Perevodnoy)',
+                              'Pass attacks to the next player',
+                              GameVariant.transfer,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                     const SizedBox(height: 24),
@@ -189,9 +193,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
       ),
       value: value,
-      groupValue: _variant,
       activeColor: AppTheme.gold,
-      onChanged: (v) => setState(() => _variant = v!),
     );
   }
 }

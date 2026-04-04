@@ -57,7 +57,7 @@ void main() {
   group('GameEngine', () {
     const engine = GameEngine();
 
-    GameState _createTestGame({GameVariant variant = GameVariant.classic}) {
+    GameState createTestGame({GameVariant variant = GameVariant.classic}) {
       final players = [
         Player(id: 'p1', name: 'Alice', isHost: true),
         Player(id: 'p2', name: 'Bob'),
@@ -72,7 +72,7 @@ void main() {
     }
 
     test('creates and deals game correctly', () {
-      final state = _createTestGame();
+      final state = createTestGame();
       expect(state.phase, equals(GamePhase.attacking));
       expect(state.players[0].cardCount, equals(6));
       expect(state.players[1].cardCount, equals(6));
@@ -80,7 +80,7 @@ void main() {
     });
 
     test('attacker can play first card (any card)', () {
-      final state = _createTestGame();
+      final state = createTestGame();
       final attacker = state.players[state.attackerIndex];
       final card = attacker.hand.first;
       final result = engine.processAction(
@@ -93,7 +93,7 @@ void main() {
     });
 
     test('defender cannot attack', () {
-      final state = _createTestGame();
+      final state = createTestGame();
       final defender = state.players[state.defenderIndex];
       final card = defender.hand.first;
       final result = engine.processAction(
@@ -104,7 +104,7 @@ void main() {
     });
 
     test('defender can pick up', () {
-      var state = _createTestGame();
+      var state = createTestGame();
       final attacker = state.players[state.attackerIndex];
       final defender = state.players[state.defenderIndex];
       final attackCard = attacker.hand.first;
@@ -126,7 +126,7 @@ void main() {
     });
 
     test('serialization roundtrip', () {
-      final state = _createTestGame();
+      final state = createTestGame();
       final json = state.toJson();
       final restored = GameState.fromJson(json);
       expect(restored.gameId, equals(state.gameId));

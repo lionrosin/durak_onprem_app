@@ -123,10 +123,11 @@ class _PlayerAvatarWidgetState extends State<PlayerAvatarWidget>
                     _buildRoleBadge('🛡️ DEF', AppTheme.warning),
                   if (widget.player.hasEmptyHand)
                     _buildRoleBadge('✓ DONE', AppTheme.success),
-                  if (!widget.isAttacker &&
-                      !widget.isDefender &&
-                      !widget.player.hasEmptyHand)
+                  if (!widget.player.hasEmptyHand) ...[
+                    if (widget.isAttacker || widget.isDefender)
+                      const SizedBox(width: 6),
                     _buildCardCount(),
+                  ],
                 ],
               ),
             ],

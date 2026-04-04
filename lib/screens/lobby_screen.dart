@@ -170,7 +170,7 @@ class _LobbyScreenState extends State<LobbyScreen>
           Expanded(
             child: ListView.separated(
               itemCount: maxPlayers,
-              separatorBuilder: (_, __) => const Divider(
+              separatorBuilder: (_, _) => const Divider(
                 color: AppTheme.textSecondary,
                 height: 1,
                 indent: 48,

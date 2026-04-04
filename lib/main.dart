@@ -475,11 +475,9 @@ class _AppShellState extends State<AppShell> {
           break;
       }
     } catch (e) {
-      // Ignore malformed messages
+      debugPrint('Error handling network message: $e');
     }
   }
-
-
 
   void _onSettings() {
     Navigator.push(

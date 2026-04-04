@@ -85,6 +85,12 @@ class NearbyServiceImpl implements NetworkService {
     }
   }
 
+  /// Whether the service is currently advertising.
+  bool get isAdvertising => _isAdvertising;
+
+  /// Whether the service is currently browsing.
+  bool get isBrowsing => _isBrowsing;
+
   @override
   Stream<PeerDevice> get onPeerDiscovered => _peerDiscoveredController.stream;
 
