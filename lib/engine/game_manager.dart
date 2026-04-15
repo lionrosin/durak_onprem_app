@@ -4,6 +4,29 @@ import '../models/game_state.dart';
 import '../models/player.dart';
 import 'game_engine.dart';
 
+/// Describes how a round ended — for UI animation purposes.
+enum RoundEndType {
+  /// Successful defense — cards go to discard pile (bita).
+  defenseBita,
+  /// Defender picked up — cards go to defender's hand.
+  defenderPickUp,
+}
+
+/// Event emitted when a round ends, carrying the cards for animation.
+class RoundEndEvent {
+  final RoundEndType type;
+  final List<TablePair> tablePairs;
+  final int defenderIndex;
+  final String defenderName;
+
+  const RoundEndEvent({
+    required this.type,
+    required this.tablePairs,
+    required this.defenderIndex,
+    required this.defenderName,
+  });
+}
+
 /// Orchestrates game flow, bridging UI, game logic, and network.
 /// This is the primary state holder — UI listens to this via ChangeNotifier.
 class GameManager extends ChangeNotifier {
@@ -11,6 +34,15 @@ class GameManager extends ChangeNotifier {
   GameState? _state;
   String? _localPlayerId;
   String? _errorMessage;
+
+  /// The latest round-end event (consumed by the UI for animation).
+  RoundEndEvent? _lastRoundEnd;
+  RoundEndEvent? get lastRoundEnd => _lastRoundEnd;
+
+  /// Clear the round-end event after the UI has consumed it.
+  void clearRoundEnd() {
+    _lastRoundEnd = null;
+  }
 
   /// Current game state (null if no game active).
   GameState? get state => _state;
@@ -124,6 +156,29 @@ class GameManager extends ChangeNotifier {
 
   /// Apply a received game state from network (client mode).
   void applyNetworkState(GameState newState) {
+    // Detect round end for animation: old state had table cards, new doesn't.
+    if (_state != null &&
+        _state!.hasTableCards &&
+        newState.tablePairs.isEmpty) {
+      // Reliable detection: if the discard pile grew, the table cards went
+      // there (bita / successful defense). If it didn't grow, the defender
+      // picked them up (pickup doesn't add to discard).
+      final isBita =
+          newState.discardPile.length > _state!.discardPile.length;
+
+      _lastRoundEnd = RoundEndEvent(
+        type: isBita ? RoundEndType.defenseBita : RoundEndType.defenderPickUp,
+        tablePairs: _state!.tablePairs
+            .map((p) => TablePair(
+                  attackCard: p.attackCard,
+                  defenseCard: p.defenseCard,
+                ))
+            .toList(),
+        defenderIndex: _state!.defenderIndex,
+        defenderName: _state!.players[_state!.defenderIndex].name,
+      );
+    }
+
     _state = newState;
     _errorMessage = null;
     notifyListeners();
@@ -187,10 +242,60 @@ class GameManager extends ChangeNotifier {
       return false;
     }
 
+    // Snapshot the table before processing — used to detect round end.
+    final hadTableCards = _state!.hasTableCards;
+    final previousTablePairs = hadTableCards
+        ? _state!.tablePairs
+            .map((p) => TablePair(
+                  attackCard: p.attackCard,
+                  defenseCard: p.defenseCard,
+                ))
+            .toList()
+        : <TablePair>[];
+    final previousDefenderIndex = _state!.defenderIndex;
+    final previousDefenderName = _state!.players[previousDefenderIndex].name;
+    final isPickUpAction = action is PickUpAction;
+
     final result = _engine.processAction(_state!, action);
     if (result.success) {
       _state = result.state;
       _errorMessage = null;
+
+      // Auto-pass: if we're in the attacking phase and no attacker
+      // has any playable cards, automatically pass for all of them.
+      if (_state != null &&
+          _state!.phase == GamePhase.attacking &&
+          _state!.hasTableCards &&
+          _engine.shouldAutoPassAttackers(_state!)) {
+        // Auto-pass all eligible attackers
+        for (int i = 0; i < _state!.players.length; i++) {
+          if (i == _state!.defenderIndex) continue;
+          if (_state!.finishedPlayers.contains(i)) continue;
+          if (_state!.passedPlayers.contains(i)) continue;
+          final passResult = _engine.processAction(
+            _state!,
+            PassAction(playerId: _state!.players[i].id),
+          );
+          if (passResult.success) {
+            _state = passResult.state;
+          }
+        }
+      }
+
+      // Detect round end: table had cards but is now empty.
+      if (hadTableCards &&
+          previousTablePairs.isNotEmpty &&
+          !_state!.hasTableCards) {
+        _lastRoundEnd = RoundEndEvent(
+          type: isPickUpAction
+              ? RoundEndType.defenderPickUp
+              : RoundEndType.defenseBita,
+          tablePairs: previousTablePairs,
+          defenderIndex: previousDefenderIndex,
+          defenderName: previousDefenderName,
+        );
+      }
+
       // Notify network layer
       onActionToSend?.call(action);
       onStateBroadcast?.call(_state!);

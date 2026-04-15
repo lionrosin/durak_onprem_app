@@ -75,6 +75,7 @@ class _AppShellState extends State<AppShell> {
   final List<PeerDevice> _discoveredPeers = [];
   final List<StreamSubscription> _networkSubs = [];
   GameVariant _lobbyVariant = GameVariant.classic;
+  bool _isConnecting = false;
 
   @override
   void dispose() {
@@ -376,11 +377,12 @@ class _AppShellState extends State<AppShell> {
     // Listen for discovered peers
     _networkSubs.add(
       _networkService!.onPeerDiscovered.listen((peer) {
+        debugPrint('[Main] Peer discovered: ${peer.name} at ${peer.id}');
         // Avoid duplicates
         if (!_discoveredPeers.any((p) => p.id == peer.id)) {
           _discoveredPeers.add(peer);
-          // Auto-connect to first discovered host
-          if (_currentScreen == AppScreen.home) {
+          // Auto-connect to first discovered host (while still on home/searching)
+          if (_currentScreen == AppScreen.home && !_isConnecting) {
             _connectToHost(peer);
           }
         }
@@ -436,10 +438,24 @@ class _AppShellState extends State<AppShell> {
     }
   }
 
+
   Future<void> _connectToHost(PeerDevice peer) async {
+    if (_isConnecting) return;
+    _isConnecting = true;
+
+    if (mounted) {
+      _showSnack('Found "${peer.name}" — connecting...');
+    }
+
+    debugPrint('[Main] Attempting connection to ${peer.name} at ${peer.id}');
     final success = await _networkService!.connectToPeer(peer.id);
+
+    _isConnecting = false;
+
     if (!success && mounted) {
-      _showSnack('Could not connect to ${peer.name}');
+      _showSnack('Could not connect to ${peer.name}. Will retry when found again.');
+      // Remove from discovered so it can be re-discovered
+      _discoveredPeers.removeWhere((p) => p.id == peer.id);
     }
   }
 

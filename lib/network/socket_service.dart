@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'network_service.dart';
 import 'discovery_service.dart';
 
@@ -29,12 +30,8 @@ class SocketNetworkService implements NetworkService {
   static const Duration _heartbeatTimeout = Duration(seconds: 15);
 
   // Reconnection
-  int _reconnectAttempts = 0;
-  static const int _maxReconnectAttempts = 3;
   Timer? _reconnectTimer;
   String? _lastHostId;
-  String? _lastHostAddress;
-  int? _lastHostPort;
 
   // Streams
   final _peerDiscoveredController = StreamController<PeerDevice>.broadcast();
@@ -210,68 +207,123 @@ class SocketNetworkService implements NetworkService {
 
   @override
   Future<bool> connectToPeer(String peerId) async {
+    final parts = peerId.split(':');
+    if (parts.length < 2) return false;
+    final primaryHost = parts[0];
+    final port = int.tryParse(parts[1]);
+    if (port == null) return false;
+
+    // Build a list of candidate IPs to try.
+    final candidates = <String>[primaryHost];
+
+    // If targeting an Android emulator IP (10.0.2.x), auto-setup adb forward
+    // so we can reach it via localhost from the iOS simulator.
+    if (primaryHost.startsWith('10.0.2.')) {
+      await _tryAdbForward(port);
+      // Put localhost BEFORE the unreachable emulator IP
+      candidates.insert(0, '127.0.0.1');
+    } else {
+      if (!candidates.contains('127.0.0.1')) {
+        candidates.add('127.0.0.1');
+      }
+    }
+
+    if (!candidates.contains('10.0.2.2')) {
+      candidates.add('10.0.2.2'); // Android emulator → host machine
+    }
+
+    debugPrint('[Socket] Connection candidates for port $port: $candidates');
+
+    for (final host in candidates) {
+      try {
+        debugPrint('[Socket] Trying $host:$port...');
+
+        _hostConnection = await Socket.connect(host, port,
+            timeout: const Duration(seconds: 5));
+
+        debugPrint('[Socket] ✓ Connected to $host:$port');
+        _hostId = peerId;
+
+        // Set up listener
+        final buffer = StringBuffer();
+        _hostConnection!.listen(
+          (data) {
+            buffer.write(utf8.decode(data, allowMalformed: true));
+            _processHostBuffer(buffer);
+          },
+          onError: (error) {
+            debugPrint('[Socket] Connection error: $error');
+            _handleHostDisconnect();
+          },
+          onDone: () {
+            debugPrint('[Socket] Connection closed by host');
+            _handleHostDisconnect();
+          },
+        );
+
+        // Send handshake with platform info
+        _sendToHost(jsonEncode({
+          'type': '_handshake',
+          'name': _localName ?? 'Player',
+          'id': _localId ?? 'unknown',
+          'platform': PeerPlatform.current.name,
+        }));
+
+        return true;
+      } catch (e) {
+        debugPrint('[Socket] ✗ $host:$port failed: $e');
+      }
+    }
+
+    debugPrint('[Socket] All connection candidates failed for port $port');
+    return false;
+  }
+
+  /// Try to run `adb forward` to expose the Android emulator's port on localhost.
+  /// Only works when running on the iOS simulator (macOS process) or macOS desktop.
+  /// Fails silently on real iOS devices.
+  Future<void> _tryAdbForward(int port) async {
     try {
-      final parts = peerId.split(':');
-      final host = parts[0];
-      final port = int.parse(parts[1]);
+      // Try to find adb
+      final home = Platform.environment['HOME'] ?? '';
+      final candidates = [
+        '$home/Library/Android/sdk/platform-tools/adb',
+        '/usr/local/bin/adb',
+        '/opt/homebrew/bin/adb',
+      ];
 
-      _lastHostAddress = host;
-      _lastHostPort = port;
-
-      _hostConnection = await Socket.connect(host, port,
-          timeout: const Duration(seconds: 5));
-      _hostId = peerId;
-      _reconnectAttempts = 0;
-
-      // Set up listener
-      final buffer = StringBuffer();
-      _hostConnection!.listen(
-        (data) {
-          buffer.write(utf8.decode(data, allowMalformed: true));
-          _processHostBuffer(buffer);
-        },
-        onError: (error) {
-          _handleHostDisconnect();
-        },
-        onDone: () {
-          _handleHostDisconnect();
-        },
-      );
-
-      // Send handshake with platform info
-      _sendToHost(jsonEncode({
-        'type': '_handshake',
-        'name': _localName ?? 'Player',
-        'id': _localId ?? 'unknown',
-        'platform': PeerPlatform.current.name,
-      }));
-
-      return true;
+      for (final adbPath in candidates) {
+        if (await File(adbPath).exists()) {
+          debugPrint('[Socket] Running: $adbPath forward tcp:$port tcp:$port');
+          final result = await Process.run(
+            adbPath,
+            ['forward', 'tcp:$port', 'tcp:$port'],
+          );
+          if (result.exitCode == 0) {
+            debugPrint('[Socket] ✓ adb forward succeeded for port $port');
+          } else {
+            debugPrint('[Socket] ✗ adb forward failed: ${result.stderr}');
+          }
+          return;
+        }
+      }
+      debugPrint('[Socket] adb not found — skipping port forward');
     } catch (e) {
-      return false;
+      // Expected on real iOS devices where Process.run isn't available
+      debugPrint('[Socket] adb forward not available: $e');
     }
   }
 
   void _handleHostDisconnect() {
     _hostConnection?.destroy();
     _hostConnection = null;
+    _reconnectTimer?.cancel();
 
-    // Attempt reconnection
-    if (_reconnectAttempts < _maxReconnectAttempts &&
-        _lastHostAddress != null &&
-        _lastHostPort != null) {
-      _reconnectAttempts++;
-      final delay = Duration(seconds: _reconnectAttempts * 2);
-      _reconnectTimer = Timer(delay, () async {
-        final success = await connectToPeer(
-            '$_lastHostAddress:$_lastHostPort');
-        if (!success && _reconnectAttempts >= _maxReconnectAttempts) {
-          _peerDisconnectedController.add(_hostId ?? _lastHostId ?? '');
-        }
-      });
-    } else {
-      _peerDisconnectedController.add(_hostId ?? _lastHostId ?? '');
-    }
+    debugPrint('[Socket] Host disconnected — notifying listeners');
+
+    // Emit disconnect immediately so the UI can react.
+    // The game should end or return to menu when the host leaves.
+    _peerDisconnectedController.add(_hostId ?? _lastHostId ?? '');
   }
 
   void _processHostBuffer(StringBuffer buffer) {

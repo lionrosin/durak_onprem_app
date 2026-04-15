@@ -146,6 +146,9 @@ class GameEngine {
     newState.passedPlayers.clear(); // New card played, reset passes
     newState.sequenceNumber++;
 
+    // Check if max attacks reached — if so, no more cards can be added,
+    // so we don't need to auto-pass here (defender still needs to respond).
+
     return ActionResult.success(newState);
   }
 
@@ -211,6 +214,21 @@ class GameEngine {
     // (attacker may add more cards or pass)
     if (newState.allDefended) {
       newState.phase = GamePhase.attacking;
+
+      // Auto-continue: if no attacker can play any cards, end the round
+      if (_allAttackersHaveNoPlayableCards(newState)) {
+        // Successful defense! Discard table cards.
+        newState.discardPile.addAll(newState.allTableCards);
+        newState.tablePairs.clear();
+        newState.passedPlayers.clear();
+
+        // Draw cards
+        _drawCards(newState);
+
+        // Defender becomes the next attacker
+        _advanceTurnAfterDefense(newState);
+        _checkGameOver(newState);
+      }
     }
 
     return ActionResult.success(newState);
@@ -474,6 +492,29 @@ class GameEngine {
       if (!state.passedPlayers.contains(i)) return false;
     }
     return true;
+  }
+
+  /// Check if no attacker (main or helpers) has any playable cards to add.
+  /// Used for auto-continuing when attackers can't contribute more cards.
+  bool _allAttackersHaveNoPlayableCards(GameState state) {
+    if (state.phase != GamePhase.attacking) return false;
+    if (!state.hasTableCards) return false; // First attack must be manual
+    if (state.tablePairs.length >= state.maxAttackCards) return true;
+
+    for (int i = 0; i < state.players.length; i++) {
+      if (i == state.defenderIndex) continue;
+      if (state.finishedPlayers.contains(i)) continue;
+      // Check if this player has any card whose rank matches the table
+      final player = state.players[i];
+      final hasPlayable = player.hand.any((c) => canAttackWith(state, c));
+      if (hasPlayable) return false;
+    }
+    return true;
+  }
+
+  /// Public version for use by GameManager to check after state changes.
+  bool shouldAutoPassAttackers(GameState state) {
+    return _allAttackersHaveNoPlayableCards(state);
   }
 
   /// Get all valid cards a player can play right now.

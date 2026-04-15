@@ -8,6 +8,7 @@ import '../widgets/card_hand_widget.dart';
 import '../widgets/deck_widget.dart';
 import '../widgets/game_status_bar.dart';
 import '../widgets/player_avatar_widget.dart';
+import '../widgets/round_end_overlay.dart';
 import '../widgets/table_widget.dart';
 
 /// Main gameplay screen — table, hand, opponents, action controls.
@@ -29,6 +30,10 @@ class GameScreen extends StatefulWidget {
 class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   PlayingCard? _selectedCard;
   GamePhase? _lastPhase;
+
+  // Round-end animation state
+  RoundEndEvent? _activeRoundEnd;
+  bool _showingRoundEnd = false;
 
   // Phase change flash animation
   late final AnimationController _phaseFlashController;
@@ -92,6 +97,20 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
 
         // Trigger phase flash on phase changes
         _triggerPhaseFlash(state.phase);
+
+        // Detect round-end events from GameManager
+        if (gm.lastRoundEnd != null && !_showingRoundEnd) {
+          final event = gm.lastRoundEnd!;
+          gm.clearRoundEnd();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              setState(() {
+                _activeRoundEnd = event;
+                _showingRoundEnd = true;
+              });
+            }
+          });
+        }
 
         // Check for game over
         if (state.phase == GamePhase.gameOver) {
@@ -213,6 +232,20 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                   );
                 },
               ),
+
+              // Round-end card-flying animation overlay
+              if (_showingRoundEnd && _activeRoundEnd != null)
+                RoundEndOverlay(
+                  event: _activeRoundEnd!,
+                  onComplete: () {
+                    if (mounted) {
+                      setState(() {
+                        _showingRoundEnd = false;
+                        _activeRoundEnd = null;
+                      });
+                    }
+                  },
+                ),
             ],
           ),
         );
